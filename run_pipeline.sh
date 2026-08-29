@@ -60,7 +60,7 @@ declare -A PRESET_WEATHER=(
 # ============ CONFIG — edit these ============
 CARLA_ROOT="/media/its/4bb1988e-283d-48b5-8b92-feaf62709288/CARLA_0.9.16"
 LOG_FILE="${SCENARIO_NAME}.log"
-WARMUP_SECONDS=10     # recorded but skipped during capture - lets traffic disperse from the
+WARMUP_SECONDS=20     # recorded but skipped during capture - lets traffic disperse from the
                       # simultaneous-spawn "everyone piles up at the nearest intersection" moment
 CAPTURE_DURATION=40   # actual usable seconds captured per weather, AFTER the warmup
 RECORD_DURATION=$((WARMUP_SECONDS + CAPTURE_DURATION))
