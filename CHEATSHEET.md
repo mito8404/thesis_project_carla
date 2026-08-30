@@ -45,6 +45,21 @@ Each named scenario gets its own log file and its own output folders — nothing
 
 `suburban` and `highway` get a lighter 3-preset weather set on purpose — for those two the environment/road structure itself is the point of including them, not the weather variation. Bump their `PRESET_WEATHER[...]` entries up if you want full parity with `city`.
 
+### Per-scenario vehicle/pedestrian density
+
+A scenario with no row below just uses the global `NUM_CARS`/`NUM_BIKES`/`NUM_WALKERS` at the top of `run_pipeline.sh` (currently 60/40/120). Add a row here (and a matching entry in `PRESET_CARS`/`PRESET_BIKES`/`PRESET_WALKERS` in `run_pipeline.sh`) whenever you override a scenario's density, so this table always matches what's actually configured — don't let it drift out of sync.
+
+| Scenario | Cars | Bikes | Walkers | Why |
+|---|---|---|---|---|
+| `tunnel` | 80 | 5 | 5 | Realistically almost nobody walks through a highway tunnel - kept pedestrians/bikes minimal. Cars set high on purpose relative to measured capacity (only 18/265 vehicle spawn points fell within `--radius 80` in Town03) so CARLA fills every available spawn point instead of under-using the space - the `WARNING: only N spawn points available` line is expected here, not a problem to chase. |
+| `underpass` | 80 | 5 | 5 | Same reasoning as `tunnel` - Town05's bridge/underpass is the same "nobody walks here" structural case. |
+| `city` | *(global)* | *(global)* | *(global)* | |
+| `waterfront` | *(global)* | *(global)* | *(global)* | |
+| `suburban` | *(global)* | *(global)* | *(global)* | |
+| `highway` | *(global)* | *(global)* | *(global)* | |
+
+Fill in a row's Cars/Bikes/Walkers once you give it its own override, and jot down the reasoning in "Why" while it's still fresh — it's the kind of decision that's easy to forget the justification for a few weeks later when writing this up.
+
 ---
 
 ## Kill everything / clean slate
