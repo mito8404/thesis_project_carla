@@ -51,14 +51,16 @@ A scenario with no row below just uses the global `NUM_CARS`/`NUM_BIKES`/`NUM_WA
 
 | Scenario | Cars | Bikes | Walkers | Why |
 |---|---|---|---|---|
+| `city` | 80 | 40 | 150 | Densely populated overall, by design - cars and people both high, this is the "busy downtown" scenario. |
+| `suburban` | 35 | 15 | 100 | Densely populated with *people*, average cars - residential streets see plenty of foot traffic but only moderate car traffic, unlike downtown. |
+| `highway` | 120 | 0 | 0 | Densely populated with cars. Bikes/walkers are 0, not just "low" - pedestrians and cyclists are illegal on a limited-access highway in real life, so 0 is the realistic choice, not a placeholder. |
 | `tunnel` | 80 | 5 | 5 | Realistically almost nobody walks through a highway tunnel - kept pedestrians/bikes minimal. Cars set high on purpose relative to measured capacity (only 18/265 vehicle spawn points fell within `--radius 80` in Town03) so CARLA fills every available spawn point instead of under-using the space - the `WARNING: only N spawn points available` line is expected here, not a problem to chase. |
 | `underpass` | 80 | 5 | 5 | Same reasoning as `tunnel` - Town05's bridge/underpass is the same "nobody walks here" structural case. |
-| `city` | *(global)* | *(global)* | *(global)* | |
-| `waterfront` | *(global)* | *(global)* | *(global)* | |
-| `suburban` | *(global)* | *(global)* | *(global)* | |
-| `highway` | *(global)* | *(global)* | *(global)* | |
+| `waterfront` | *(global)* | *(global)* | *(global)* | Not yet decided - a promenade probably wants pedestrian-heavy like `suburban`, but you haven't set an override yet. |
 
 Fill in a row's Cars/Bikes/Walkers once you give it its own override, and jot down the reasoning in "Why" while it's still fresh — it's the kind of decision that's easy to forget the justification for a few weeks later when writing this up.
+
+Only `tunnel`'s capacity (18 spawn points) has actually been measured against its density target - `city`/`suburban`/`highway`'s numbers above are starting points, not verified limits. If a run prints `only N spawn points available` or `N/M requested walkers found a navigable spawn point`, that's real evidence of the actual ceiling for that spot - raise `PRESET_RADIUS` for that scenario or lower its count here to match what the location can really hold.
 
 ---
 
