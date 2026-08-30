@@ -1,230 +1,171 @@
-"""
-02_weather_sweep_capture.py  (STAGE 2 of 3 — run via run_pipeline.sh, or standalone)
+# CARLA weather-sweep + SAM3 pipeline — cheat sheet
 
-Replay the recording made by 01_record_scenario.py once per weather preset,
-capturing camera frames each time. Because every replay reproduces the EXACT
-same actor trajectories from the log, the only thing that differs between
-output folders is the weather — cars, bicycles, and pedestrians are in
-identical positions frame-for-frame.
+## Files (run in this order — numbered so it's obvious)
 
-Bonus: frames are saved by simulation frame number (image.frame), so
-frame_000123.png in every weather folder is the *same simulated instant*.
-That makes this directly usable for paired cross-weather comparisons later
-(e.g. feeding matched frames into SAM3, or a domain-adaptation setup like
-Rote-DA's).
+| File | What it does |
+|---|---|
+| `run_pipeline.sh` | Runs everything below in one go, for a named scenario. **This is what you normally run.** |
+| `01_record_scenario.py` | Stage 1. Spawns cars/bikes/pedestrians and records their movement to a `.log` file. Run standalone only for quick previews. |
+| `02_weather_sweep_capture.py` | Stage 2. Replays a `.log` once per weather preset, saving camera frames. Run standalone to re-capture without re-recording. |
+| `03_sam3_segment.py` | Stage 3. Runs SAM3 over captured frames, saving segmentation masks. |
+| `CHEATSHEET.md` | This file. |
 
-Weather presets are discovered dynamically from carla.WeatherParameters
-(every static preset CARLA ships), so this automatically covers "every
-weather scenario CARLA can do" for whatever version you're running, without
-hardcoding a preset list that could drift across CARLA versions.
+All 4 must live in the same folder on `ElementsSE`.
 
-IMPORTANT — actor cleanup: the CARLA server is a persistent process that
-does NOT reset itself between script runs or between replay_file() calls.
-If actors from a previous (possibly crashed) run are left alive, a new
-replay spawns a second set directly on top of them, which is what causes
-vehicles to overlap/pile up and get violently shoved apart by physics
-("flying"). This script explicitly destroys every vehicle/walker/sensor
-actor (a) once at startup, in case a previous crashed run left a mess, and
-(b) after every single weather iteration — success, failure, or Ctrl+C —
-via try/finally, so runs can never contaminate each other.
+---
 
-Usage:
-    ./CarlaUE4.sh -quality-level=Epic   # server, separate terminal
-    python3 02_weather_sweep_capture.py --map Town10HD_Opt \
-        --log scenario01.log --duration 40 --fps 10 \
-        --camera-mode ego --out ./captures
+## One-time setup (already done, here for reference)
 
-Use --replay-start to skip a recorded "warmup" period (see run_pipeline.sh),
-and --only to run a curated subset of weather presets instead of all of them,
-e.g. --only ClearNoon ClearNight HardRainNoon HardRainNight WetNight for a
-day/night/rain contrast set rather than a full sweep.
-"""
+```bash
+pip install --no-deps "/media/its/4bb1988e-283d-48b5-8b92-feaf62709288/CARLA_0.9.16/PythonAPI/carla/dist/carla-0.9.16-cp312-cp312-manylinux_2_31_x86_64.whl"
+python3 -c "import carla; print('ok')"
+```
 
-import argparse
-import os
-import time
+---
 
-import carla
+## Run a full scenario (the normal thing you do)
 
+```bash
+chmod +x run_pipeline.sh
+./run_pipeline.sh city              # Town10 downtown, centered, full 9-weather sweep
+./run_pipeline.sh waterfront        # Town10 promenade, day/night/rain contrast set (5 presets)
+./run_pipeline.sh tunnel            # Town03 underpass, day/night/rain contrast set (5 presets)
+./run_pipeline.sh underpass         # Town05 bridge/underpass, day/night/rain contrast set (5 presets)
+./run_pipeline.sh suburban          # Town02 residential, light 3-preset weather set
+./run_pipeline.sh highway           # Town04 figure-8 highway loop, light 3-preset weather set
+./run_pipeline.sh city 43           # same scenario, different seed = different traffic pattern
+./run_pipeline.sh myscenario        # any other name -> falls back to defaults (whole map, full sweep)
+```
 
-def discover_weather_presets():
-    presets = {}
-    for name in dir(carla.WeatherParameters):
-        if name.startswith('_'):
-            continue
-        value = getattr(carla.WeatherParameters, name)
-        if isinstance(value, carla.WeatherParameters):
-            presets[name] = value
-    return dict(sorted(presets.items()))
+Each named scenario gets its own log file and its own output folders — nothing overwrites another scenario. Output lands in:
+- `carla_captures_<name>/<WeatherPreset>/frame_XXXXXX.png`
+- `carla_masks_<name>/<WeatherPreset>/<prompt>/frame_XXXXXX_NN.png`
 
+**`waterfront` still needs coordinates filled in** — until you do, it behaves like `city` (whole map). See "Finding coordinates" below, then edit its `PRESET_CENTER[...]` line near the top of `run_pipeline.sh`. The other five already have real centers found via `find_location.py`.
 
-def destroy_all_actors(client, world):
-    """Nuke every vehicle/walker/controller/sensor currently in the world.
-    Safe to call even if the world is already empty. Called before the
-    sweep starts (in case a previous crashed run left actors alive) and
-    after every single weather iteration."""
-    actors = world.get_actors()
-    to_destroy = list(actors.filter('vehicle.*')) + \
-        list(actors.filter('walker.pedestrian.*')) + \
-        list(actors.filter('controller.ai.walker')) + \
-        list(actors.filter('sensor.*'))
-    if not to_destroy:
-        return
-    for a in to_destroy:
-        try:
-            if a.type_id.startswith('controller.'):
-                a.stop()
-        except RuntimeError:
-            pass
-    client.apply_batch([carla.command.DestroyActor(a.id) for a in to_destroy])
-    world.tick()
-    print(f"  (cleaned up {len(to_destroy)} leftover actors)")
+`suburban` and `highway` get a lighter 3-preset weather set on purpose — for those two the environment/road structure itself is the point of including them, not the weather variation. Bump their `PRESET_WEATHER[...]` entries up if you want full parity with `city`.
 
+### Per-scenario vehicle/pedestrian density
 
-def find_hero(world, timeout=10.0):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        for actor in world.get_actors().filter('vehicle.*'):
-            if actor.attributes.get('role_name') == 'hero':
-                return actor
-        world.tick()
-    return None
+A scenario with no row below just uses the global `NUM_CARS`/`NUM_BIKES`/`NUM_WALKERS` at the top of `run_pipeline.sh` (currently 60/40/120). Add a row here (and a matching entry in `PRESET_CARS`/`PRESET_BIKES`/`PRESET_WALKERS` in `run_pipeline.sh`) whenever you override a scenario's density, so this table always matches what's actually configured — don't let it drift out of sync.
 
+| Scenario | Cars | Bikes | Walkers | Why |
+|---|---|---|---|---|
+| `tunnel` | 80 | 5 | 5 | Realistically almost nobody walks through a highway tunnel - kept pedestrians/bikes minimal. Cars set high on purpose relative to measured capacity (only 18/265 vehicle spawn points fell within `--radius 80` in Town03) so CARLA fills every available spawn point instead of under-using the space - the `WARNING: only N spawn points available` line is expected here, not a problem to chase. |
+| `underpass` | 80 | 5 | 5 | Same reasoning as `tunnel` - Town05's bridge/underpass is the same "nobody walks here" structural case. |
+| `city` | *(global)* | *(global)* | *(global)* | |
+| `waterfront` | *(global)* | *(global)* | *(global)* | |
+| `suburban` | *(global)* | *(global)* | *(global)* | |
+| `highway` | *(global)* | *(global)* | *(global)* | |
 
-def capture_one_weather(client, world, args, weather_name, weather_params, bp_lib):
-    out_dir = os.path.join(args.out, weather_name)
-    os.makedirs(out_dir, exist_ok=True)
+Fill in a row's Cars/Bikes/Walkers once you give it its own override, and jot down the reasoning in "Why" while it's still fresh — it's the kind of decision that's easy to forget the justification for a few weeks later when writing this up.
 
-    print(f"\n=== {weather_name} ===")
+---
 
-    camera = None
-    try:
-        client.replay_file(args.log, args.replay_start, args.duration, 0)
-        world.tick()  # let the replay start populating actors
+## Kill everything / clean slate
 
-        world.set_weather(weather_params)  # weather is independent of the recording
+```bash
+pkill -9 -f -i carla
+sleep 3
+ps aux | grep -i carla        # should show only the grep itself
+ss -tulpn | grep 2000         # should print nothing
+```
 
-        cam_bp = bp_lib.find('sensor.camera.rgb')
-        cam_bp.set_attribute('image_size_x', str(args.width))
-        cam_bp.set_attribute('image_size_y', str(args.height))
-        cam_bp.set_attribute('fov', '90')
-        cam_bp.set_attribute('sensor_tick', str(1.0 / args.fps))
+Run this before starting a new `./run_pipeline.sh` if a previous run crashed or was interrupted.
 
-        if args.camera_mode == 'ego':
-            hero = find_hero(world)
-            if hero is None:
-                print(f"  WARNING: hero actor not found for {weather_name}, skipping capture.")
-                return
-            cam_transform = carla.Transform(carla.Location(x=1.5, z=2.0))  # dashcam-ish mount
-            camera = world.spawn_actor(cam_bp, cam_transform, attach_to=hero)
-        else:  # fixed
-            x, y, z, pitch, yaw, roll = args.camera_transform
-            cam_transform = carla.Transform(
-                carla.Location(x=x, y=y, z=z),
-                carla.Rotation(pitch=pitch, yaw=yaw, roll=roll))
-            camera = world.spawn_actor(cam_bp, cam_transform)
+---
 
-        frame_count = 0
+## Quick preview (before committing to a full run)
 
-        def on_image(image):
-            nonlocal frame_count
-            image.save_to_disk(os.path.join(out_dir, f"frame_{image.frame:06d}.png"))
-            frame_count += 1
+Start the server manually first:
+```bash
+pkill -9 -f -i carla; sleep 3
+cd /media/its/4bb1988e-283d-48b5-8b92-feaf62709288/CARLA_0.9.16
+./CarlaUE4.sh -quality-level=Epic
+```
 
-        camera.listen(on_image)
+In a second terminal (`sam3` env), watch density live or grab a few sample frames:
+```bash
+# just watch the CARLA window while it records - fastest check
+python3 01_record_scenario.py --map Town10HD_Opt --duration 15 --log test_scenario.log -n 40 -b 25 -w 120 --seed 42
 
-        n_ticks = int(args.duration / args.fixed_delta_seconds)
-        for _ in range(n_ticks):
-            world.tick()
+# or grab actual sample images from one weather preset only
+python3 02_weather_sweep_capture.py --map Town10HD_Opt --log test_scenario.log --duration 15 --fps 5 --camera-mode ego --out ./preview --only ClearNoon
+```
 
-        print(f"  saved {frame_count} frames to {out_dir}")
+---
 
-    finally:
-        # Runs on success, on exception, AND on Ctrl+C — this is what
-        # prevents the "sensor still alive" abort and actor pile-up.
-        if camera is not None:
-            try:
-                camera.stop()
-            except RuntimeError:
-                pass
-            try:
-                camera.destroy()
-            except RuntimeError:
-                pass
-        destroy_all_actors(client, world)
+## See what a mask actually looks like (not just a black frame with a white blob)
 
+By default `03_sam3_segment.py` (and `sam3_batch_segment.py`) writes plain black/white ground-truth masks - correct for training, useless for eyeballing. Add `--overlays` to also save the original frame with the mask painted on as a translucent color highlight, written to a sibling folder so it never touches the real masks:
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--host', default='127.0.0.1')
-    ap.add_argument('--port', default=2000, type=int)
-    ap.add_argument('--map', default=None,
-                     help='Must match the --map used in 01_record_scenario.py.')
-    ap.add_argument('--log', required=True)
-    ap.add_argument('--replay-start', type=float, default=0.0,
-                     help='Seconds into the recording to START playback from. Use this to skip '
-                          'the "cold start" seconds right after everyone spawns and simultaneously '
-                          'pulls off toward the nearest intersection, before traffic has settled '
-                          'into a naturally spread-out flow — e.g. record --duration 50 and capture '
-                          'with --replay-start 10 --duration 40 to use only the settled last 40s.')
-    ap.add_argument('--duration', type=float, default=40.0,
-                     help='Playback length from --replay-start. (replay-start + duration) must be '
-                          '<= the recorded duration.')
-    ap.add_argument('--fixed-delta-seconds', type=float, default=0.05,
-                     help='Must match the recording run for frame numbers to line up.')
-    ap.add_argument('--fps', type=float, default=10.0, help='Camera capture rate.')
-    ap.add_argument('--width', type=int, default=1280)
-    ap.add_argument('--height', type=int, default=720)
-    ap.add_argument('--camera-mode', choices=['ego', 'fixed'], default='ego',
-                     help="'ego' = dashcam mounted on the hero vehicle (needs role_name='hero' "
-                          "from the record step). 'fixed' = static world-space camera, "
-                          "use --camera-transform.")
-    ap.add_argument('--camera-transform', type=float, nargs=6,
-                     default=[0, 0, 10, -30, 0, 0],
-                     metavar=('X', 'Y', 'Z', 'PITCH', 'YAW', 'ROLL'),
-                     help='Only used with --camera-mode fixed. Get real coordinates from '
-                          'the CARLA spectator or a spawn point on your map.')
-    ap.add_argument('--out', default='./captures')
-    ap.add_argument('--only', nargs='*', default=None,
-                     help='Optional list of preset names to run instead of all of them, '
-                          'e.g. --only ClearNoon HardRainNoon ClearNight')
-    args = ap.parse_args()
+```bash
+python3 03_sam3_segment.py --frames-dir ./captures --out ./masks \
+    --prompts road car person bicycle --overlays
+# masks:    ./masks/<weather>/<prompt>/frame_XXXXXX_NN.png       (black/white, ground truth)
+# overlays: ./masks_overlays/<weather>/<prompt>/frame_XXXXXX_NN.png  (color highlight on original frame)
+```
 
-    client = carla.Client(args.host, args.port)
-    client.set_timeout(30.0)
-    world = client.load_world(args.map) if args.map else client.get_world()
+`--overlay-alpha 0.3` (more transparent, default 0.5) or `--overlay-out /some/other/path` to change where they land.
 
-    settings = world.get_settings()
-    settings.synchronous_mode = True
-    settings.fixed_delta_seconds = args.fixed_delta_seconds
-    world.apply_settings(settings)
+---
 
-    bp_lib = world.get_blueprint_library()
+## Only one car/person gets segmented per frame even though several are visible
 
-    # Defensive cleanup in case a previous crashed/interrupted run left
-    # actors alive in this (persistent) server before we even start.
-    print("Clearing any leftover actors from previous runs...")
-    destroy_all_actors(client, world)
+This is SAM3's own internal confidence filter, not a bug in these scripts. `Sam3Processor` drops any detected object scoring below `--score-threshold` (default `0.5`) *inside the model*, before masks ever reach `03_sam3_segment.py` - and that score is a class-match confidence **times** an object-presence confidence, so it drops fast for anything distant, partially occluded, or poorly lit (worse at night). Usually only the single clearest/nearest object per prompt survives.
 
-    presets = discover_weather_presets()
-    if args.only:
-        presets = {k: v for k, v in presets.items() if k in args.only}
-    print(f"Sweeping {len(presets)} weather presets: {list(presets.keys())}")
+Lower it to surface more instances:
+```bash
+python3 03_sam3_segment.py --frames-dir ./captures --out ./masks \
+    --prompts road car person bicycle --score-threshold 0.3
+```
+Trade-off: more instances kept also means more false positives/noisier masks - use `--overlays` (above) to visually check where the new cutoff lands before committing to it for a full run.
 
-    os.makedirs(args.out, exist_ok=True)
+---
 
-    try:
-        for name, params in presets.items():
-            capture_one_weather(client, world, args, name, params, bp_lib)
-    except KeyboardInterrupt:
-        print("\nInterrupted — cleaning up before exit...")
-        destroy_all_actors(client, world)
-    finally:
-        settings.synchronous_mode = False
-        world.apply_settings(settings)
+## Capture a specific time window from an existing recording
 
-    print("\nDone.")
+No need to re-record — `.log` files are reusable. `--replay-start` skips ahead:
+```bash
+python3 02_weather_sweep_capture.py --map Town10HD_Opt --log scenario01.log \
+    --replay-start 30 --duration 10 --fps 10 --camera-mode ego --out ./captures_30_40s
+```
 
+---
 
-if __name__ == '__main__':
-    main()
+## Finding coordinates for a specific spot (tunnel, waterfront, anywhere)
+
+CARLA doesn't publish coordinates for named features (checked the official Town03/Town10 docs - they only describe the layout in words, no X/Y). Two ways to find them yourself:
+
+**Option A — scout script (recommended, no manual flying):**
+```bash
+./CarlaUE4.sh -quality-level=Epic   # server, separate terminal
+python3 find_location.py --map Town03 --out ./town03_scout
+python3 find_location.py --map Town10HD_Opt --out ./town10_scout
+```
+This screenshots every spawn point on the map from driving height. Open the output folder and scroll through - each filename already has its coordinates baked in, e.g. `047_x12.4_y-58.9.png` means `--center 12.4 -58.9`. Use `--stride 2` if a map has hundreds of spawn points and you want fewer, faster thumbnails.
+
+**Option B — manual free-fly (for fine-tuning, or if a spawn point isn't quite close enough):**
+1. Server running, then in the CARLA window: **right-click-drag + WASD** to free-fly the spectator to the spot you want.
+2. In a second terminal:
+   ```bash
+   python3 -c "
+   import carla
+   w = carla.Client('127.0.0.1', 2000).get_world()
+   t = w.get_spectator().get_transform()
+   print(f'{t.location.x:.1f} {t.location.y:.1f}')
+   "
+   ```
+
+Either way, use the result as `--center X Y --radius 150` on `01_record_scenario.py`, or paste it into the matching `PRESET_CENTER[...]` line in `run_pipeline.sh`.
+
+Note: **Town10HD_Opt has no tunnel** — CARLA's Town03 is the map with a confirmed underpass, which is why the `tunnel` preset in `run_pipeline.sh` is set to `Town03` instead.
+
+---
+
+## Known gotchas
+
+- **`conda run` can eat `Ctrl+C`.** After interrupting, verify with `ps aux | grep -iE "carla|python3"` that nothing's still running.
+- **The CARLA server never resets itself.** A crashed run leaves actors alive for the *next* run to pile on top of — always do the "kill everything" step above after any crash.
+- **Two servers on the same port = segfault.** Never manually launch `CarlaUE4.sh` in one terminal while also running `run_pipeline.sh` (which launches its own).
+- **Density (`-n`/`-b`/`-w`) lives in `01_record_scenario.py`'s config, not `02_weather_sweep_capture.py`** — the capture stage has no concept of vehicle/pedestrian counts, it only replays whatever the recording already has.
