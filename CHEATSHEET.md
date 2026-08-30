@@ -27,9 +27,12 @@ python3 -c "import carla; print('ok')"
 
 ```bash
 chmod +x run_pipeline.sh
-./run_pipeline.sh city              # downtown Town10HD_Opt, whole map, every weather preset
-./run_pipeline.sh tunnel            # Town03 underpass, day/night/rain contrast set
-./run_pipeline.sh waterfront        # Town10 waterfront area, day/night/rain contrast set
+./run_pipeline.sh city              # Town10 downtown, centered, full 9-weather sweep
+./run_pipeline.sh waterfront        # Town10 promenade, day/night/rain contrast set (5 presets)
+./run_pipeline.sh tunnel            # Town03 underpass, day/night/rain contrast set (5 presets)
+./run_pipeline.sh underpass         # Town05 bridge/underpass, day/night/rain contrast set (5 presets)
+./run_pipeline.sh suburban          # Town02 residential, light 3-preset weather set
+./run_pipeline.sh highway           # Town04 figure-8 highway loop, light 3-preset weather set
 ./run_pipeline.sh city 43           # same scenario, different seed = different traffic pattern
 ./run_pipeline.sh myscenario        # any other name -> falls back to defaults (whole map, full sweep)
 ```
@@ -38,7 +41,9 @@ Each named scenario gets its own log file and its own output folders — nothing
 - `carla_captures_<name>/<WeatherPreset>/frame_XXXXXX.png`
 - `carla_masks_<name>/<WeatherPreset>/<prompt>/frame_XXXXXX_NN.png`
 
-**`tunnel` and `waterfront` need coordinates filled in before they're actually useful** — until you do, they behave like `city` (whole map). See "Finding coordinates" below, then edit the `PRESET_CENTER[...]` lines near the top of `run_pipeline.sh`.
+**`waterfront` still needs coordinates filled in** — until you do, it behaves like `city` (whole map). See "Finding coordinates" below, then edit its `PRESET_CENTER[...]` line near the top of `run_pipeline.sh`. The other five already have real centers found via `find_location.py`.
+
+`suburban` and `highway` get a lighter 3-preset weather set on purpose — for those two the environment/road structure itself is the point of including them, not the weather variation. Bump their `PRESET_WEATHER[...]` entries up if you want full parity with `city`.
 
 ---
 
@@ -115,6 +120,17 @@ python3 02_weather_sweep_capture.py --map Town10HD_Opt --log scenario01.log \
 
 ## Finding coordinates for a specific spot (tunnel, waterfront, anywhere)
 
+CARLA doesn't publish coordinates for named features (checked the official Town03/Town10 docs - they only describe the layout in words, no X/Y). Two ways to find them yourself:
+
+**Option A — scout script (recommended, no manual flying):**
+```bash
+./CarlaUE4.sh -quality-level=Epic   # server, separate terminal
+python3 find_location.py --map Town03 --out ./town03_scout
+python3 find_location.py --map Town10HD_Opt --out ./town10_scout
+```
+This screenshots every spawn point on the map from driving height. Open the output folder and scroll through - each filename already has its coordinates baked in, e.g. `047_x12.4_y-58.9.png` means `--center 12.4 -58.9`. Use `--stride 2` if a map has hundreds of spawn points and you want fewer, faster thumbnails.
+
+**Option B — manual free-fly (for fine-tuning, or if a spawn point isn't quite close enough):**
 1. Server running, then in the CARLA window: **right-click-drag + WASD** to free-fly the spectator to the spot you want.
 2. In a second terminal:
    ```bash
@@ -125,7 +141,8 @@ python3 02_weather_sweep_capture.py --map Town10HD_Opt --log scenario01.log \
    print(f'{t.location.x:.1f} {t.location.y:.1f}')
    "
    ```
-3. Use that as `--center X Y --radius 150` on `01_record_scenario.py`, or paste it into the matching `PRESET_CENTER[...]` line in `run_pipeline.sh`.
+
+Either way, use the result as `--center X Y --radius 150` on `01_record_scenario.py`, or paste it into the matching `PRESET_CENTER[...]` line in `run_pipeline.sh`.
 
 Note: **Town10HD_Opt has no tunnel** — CARLA's Town03 is the map with a confirmed underpass, which is why the `tunnel` preset in `run_pipeline.sh` is set to `Town03` instead.
 
