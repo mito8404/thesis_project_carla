@@ -75,6 +75,34 @@ python3 02_weather_sweep_capture.py --map Town10HD_Opt --log test_scenario.log -
 
 ---
 
+## See what a mask actually looks like (not just a black frame with a white blob)
+
+By default `03_sam3_segment.py` (and `sam3_batch_segment.py`) writes plain black/white ground-truth masks - correct for training, useless for eyeballing. Add `--overlays` to also save the original frame with the mask painted on as a translucent color highlight, written to a sibling folder so it never touches the real masks:
+
+```bash
+python3 03_sam3_segment.py --frames-dir ./captures --out ./masks \
+    --prompts road car person bicycle --overlays
+# masks:    ./masks/<weather>/<prompt>/frame_XXXXXX_NN.png       (black/white, ground truth)
+# overlays: ./masks_overlays/<weather>/<prompt>/frame_XXXXXX_NN.png  (color highlight on original frame)
+```
+
+`--overlay-alpha 0.3` (more transparent, default 0.5) or `--overlay-out /some/other/path` to change where they land.
+
+---
+
+## Only one car/person gets segmented per frame even though several are visible
+
+This is SAM3's own internal confidence filter, not a bug in these scripts. `Sam3Processor` drops any detected object scoring below `--score-threshold` (default `0.5`) *inside the model*, before masks ever reach `03_sam3_segment.py` - and that score is a class-match confidence **times** an object-presence confidence, so it drops fast for anything distant, partially occluded, or poorly lit (worse at night). Usually only the single clearest/nearest object per prompt survives.
+
+Lower it to surface more instances:
+```bash
+python3 03_sam3_segment.py --frames-dir ./captures --out ./masks \
+    --prompts road car person bicycle --score-threshold 0.3
+```
+Trade-off: more instances kept also means more false positives/noisier masks - use `--overlays` (above) to visually check where the new cutoff lands before committing to it for a full run.
+
+---
+
 ## Capture a specific time window from an existing recording
 
 No need to re-record — `.log` files are reusable. `--replay-start` skips ahead:
