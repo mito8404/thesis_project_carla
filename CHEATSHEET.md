@@ -36,7 +36,25 @@ chmod +x run_pipeline.sh
 ./run_pipeline.sh city 43           # same scenario, different seed = different traffic pattern
 ./run_pipeline.sh myscenario        # any other name -> falls back to defaults (whole map, full sweep)
 ```
+## Capture status
 
+| Scenario | Status |
+|---|---|
+| City | Captured |
+| Tunnel | Captured |
+| Underpass | Captured |
+| Highway | Captured |
+| Suburban | Not captured yet for all segmentation |
+
+## Redo (masks + overlays) and why
+
+| Scenario | Redo | Why |
+|---|---|---|
+| City | Masks + overlays regenerated (`_v2`) | Overlay bug: old overlays only ever showed one detected instance per file (e.g. one car highlighted per image), making it look like SAM3 missed everything else in the frame. `_v2` adds a combined `_all` overlay per frame/prompt with every detected instance highlighted together. |
+| Underpass | Masks + overlays regenerated (`_v2`) | Same overlay bug fix as City. |
+| Suburban | Masks + overlays regenerated (`_v2`) | Same overlay bug fix as City. |
+| Tunnel | Masks + overlays regenerated (`_v2`) | Same overlay bug fix as City. |
+| Highway | Masks + overlays regenerated (`_v2`) | Same overlay bug fix as City. |
 Each named scenario gets its own log file and its own output folders — nothing overwrites another scenario. Output lands in:
 - `carla_captures_<name>/<WeatherPreset>/frame_XXXXXX.png`
 - `carla_masks_<name>/<WeatherPreset>/<prompt>/frame_XXXXXX_NN.png`
